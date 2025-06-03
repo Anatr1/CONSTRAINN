@@ -1,0 +1,6 @@
+numpy
+torch
+netCDF4
+matplotlib
+scipy
+seaborn
