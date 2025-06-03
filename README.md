@@ -14,7 +14,7 @@ The WIVERN mission promises to deliver the first global observations of the thre
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/yourusername/CONSTRAINN.git](https://github.com/yourusername/CONSTRAINN.git)
+    git clone https://github.com/Anatr1/CONSTRAINN.git
     cd CONSTRAINN
     ```
 
