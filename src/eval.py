@@ -13,14 +13,15 @@ HORIZONTAL_TOLERANCE = 5
 POSTPROCESSING_MODE = "window"
 FOLDER = "/absolute/path/to/your/folder/containing/data/in/netCDF/files"  # Update this path to your data folder
 
-non_thresholded_metrics = {
-                'BCE': [],
-                'MSE': [],
-                'MAE': [],
-            }
-accumulated_metrics = []
-
 def evaluate_checkpoint(checkpoint, no_plot=False, savefig=False):
+    local_non_thresholded_metrics = {
+        'BCE': [],
+        'MSE': [],
+        'MAE': [],
+    }
+    all_postprocess_gt_flat_chkpt = []
+    all_postprocess_pred_flat_chkpt = []
+    
     variables = ["Zm_dBZ_tot", "V_dop_IQnoconv", "T_V", "T_H", "continuous_mask", "v_AZW0_atm_vert"]
 
      # Load all files from the folder using load_splitted_data with ratio=1.
@@ -347,42 +348,75 @@ def evaluate_checkpoint(checkpoint, no_plot=False, savefig=False):
         mse = mean_squared_error(y_true, y_pred)
         mae = mean_absolute_error(y_true, y_pred)
         
-        non_thresholded_metrics['BCE'].append(bce)
-        non_thresholded_metrics['MSE'].append(mse)
-        non_thresholded_metrics['MAE'].append(mae)
+        local_non_thresholded_metrics['BCE'].append(bce)
+        local_non_thresholded_metrics['MSE'].append(mse)
+        local_non_thresholded_metrics['MAE'].append(mae)
         
         # --- Thresholded metrics ---
+        # Accumulate flattened arrays for aggregated computation later
+        # NaNs are handled here before appending, similar to eval_w_sc.py approach
+        current_gt_flat = np.nan_to_num(postprocess_ground_truth.flatten(), nan=0.0)
+        current_pred_flat = np.nan_to_num(postprocess_pred_image.flatten(), nan=0.0)
+        
+        all_postprocess_gt_flat_chkpt.append(current_gt_flat)
+        all_postprocess_pred_flat_chkpt.append(current_pred_flat)
+        
         # Substitute NaN values in the ground truth with 0.0 for metric computation.
         postprocess_ground_truth = np.nan_to_num(postprocess_ground_truth, nan=0.0)
         postprocess_pred_image = np.nan_to_num(postprocess_pred_image, nan=0.0)
 
-        sample_metrics = compute_metrics(postprocess_ground_truth.flatten(), y_pred=postprocess_pred_image.flatten())
-        if sample_metrics is not None:
-            accumulated_metrics.append(sample_metrics)
-        
         # Average metrics after the final sample.
         if i == len(data) - 1:
             output = "\n"
             print(f"Model: {checkpoint}")
             output += f"Model: {checkpoint}\n"
+            
             print("Non-thresholded metrics for all samples:")
             output += "Non-thresholded metrics for all samples:\n"
-            for key in non_thresholded_metrics.keys():
-                avg_metric = np.mean(non_thresholded_metrics[key])
-                print(f"{key}: {avg_metric:.4f}")
-                output += f"{key}: {avg_metric:.4f}\n"
+            for key in local_non_thresholded_metrics.keys():
+                if local_non_thresholded_metrics[key]: # Check if list is not empty
+                    avg_metric = np.mean(local_non_thresholded_metrics[key])
+                    print(f"{key}: {avg_metric:.4f}")
+                    output += f"{key}: {avg_metric:.4f}\n"
+                else:
+                    print(f"{key}: N/A (no samples)")
+                    output += f"{key}: N/A (no samples)\n"
             
             print("\nThresholded metrics for all samples:")
             output += "\nThresholded metrics for all samples:\n"
-            avg_metrics = {key: np.mean([m[key] for m in accumulated_metrics])
-                   for key in accumulated_metrics[0].keys()}
-            print_metrics(avg_metrics)
-            output += metrics_to_string(avg_metrics)
+            
+            if all_postprocess_gt_flat_chkpt and all_postprocess_pred_flat_chkpt:
+                final_gt_all_samples = np.concatenate(all_postprocess_gt_flat_chkpt)
+                final_pred_all_samples = np.concatenate(all_postprocess_pred_flat_chkpt)
+
+                # Ensure integer type for compute_metrics, assuming binary classification (0 or 1)
+                final_gt_all_samples = final_gt_all_samples.astype(np.int32)
+                final_pred_all_samples = final_pred_all_samples.astype(np.int32)
+
+                if final_gt_all_samples.size > 0: # Ensure there's data after concatenation
+                    aggregated_thresholded_metrics = compute_metrics(final_gt_all_samples, final_pred_all_samples)
+                    
+                    if aggregated_thresholded_metrics:
+                        print_metrics(aggregated_thresholded_metrics)
+                        output += metrics_to_string(aggregated_thresholded_metrics) # Assumes metrics_to_string can handle the dict
+                    else:
+                        msg = "Could not compute aggregated thresholded metrics (e.g., no positive cases or other issue).\n"
+                        print(msg, end='')
+                        output += msg
+                else:
+                    msg = "No valid data points for aggregated thresholded metrics.\n"
+                    print(msg, end='')
+                    output += msg
+            else:
+                msg = "No data accumulated for thresholded metrics.\n"
+                print(msg, end='')
+                output += msg
             
             print()
             output += "\n"
             # Append the output to a file.
-            #with open("output_metrics_cm.txt", "a") as f:
+            # Ensure the file path is correct and directory exists if uncommented
+            # with open("output_metrics_eval.txt", "a") as f:
             #    f.write(output)
 
 if __name__ == "__main__":
@@ -407,6 +441,3 @@ if __name__ == "__main__":
             print("Unknown model type in checkpoint name. Please check the checkpoint path.")
         
         evaluate_checkpoint(checkpoint, no_plot=False, savefig=True)
-        
-
-
